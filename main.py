@@ -369,7 +369,7 @@ def response_payload(response):
 
 
 def api_headers(key):
-    return {"api-key": key}
+    return {"Api-key": key}
 
 
 def call_api(endpoint, key, data=None, files=None, timeout=120):
