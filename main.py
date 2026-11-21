@@ -5,6 +5,8 @@ from flask import Flask, request, jsonify, render_template_string
 app = Flask(__name__)
 
 API_BASE = "https://api.deepai.org/api/"
+API_HEADER_NAME = "Api-Key"
+
 ENDPOINTS = {
     "text2img": "text2img",
     "image-editor": "image-editor",
@@ -27,7 +29,7 @@ HTML = r"""<!doctype html>
 <style>
 :root{color-scheme:dark}
 body{background:#0f172a;color:#f8fafc;font-family:system-ui,sans-serif;margin:0;padding:16px}
-.wrap{max-width:1050px;margin:auto;display:grid;grid-template-columns:1fr 1.2fr;gap:16px}
+.wrap{max-width:1100px;margin:auto;display:grid;grid-template-columns:1fr 1.2fr;gap:16px}
 @media(max-width:800px){.wrap{grid-template-columns:1fr}}
 .box{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:16px}
 input,select,textarea,button{width:100%;padding:9px;margin-top:6px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#fff;box-sizing:border-box}
@@ -37,19 +39,25 @@ button.grn{background:#10b981;color:#022c22}
 button:disabled{opacity:.5;cursor:not-allowed}
 pre{background:#020617;padding:12px;border-radius:6px;overflow:auto;max-height:460px;color:#38bdf8;font-size:12px;white-space:pre-wrap;word-break:break-all}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:9}
-.modal-in{background:#1e293b;padding:24px;border-radius:10px;width:90%;max-width:380px}
+.modal-in{background:#1e293b;padding:24px;border-radius:10px;width:90%;max-width:420px}
 .hide{display:none!important}
 .row{display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #334155;font-size:13px;cursor:pointer}
 .row:hover{background:#0f172a}
 .ok{color:#10b981;font-weight:700}.err{color:#ef4444;font-weight:700}
 img,video{max-width:100%;border-radius:6px;margin-top:10px}
+code{color:#7dd3fc;overflow-wrap:anywhere}
+.config{font-size:13px;color:#cbd5e1;line-height:1.6}
 </style>
 </head>
 <body>
 <div id="keyModal" class="modal">
   <div class="modal-in">
-    <h3>Enter DeepAI API Key</h3>
-    <input type="password" id="keyInput" placeholder="Paste API key" autocomplete="off">
+    <h3>DeepAI API Key</h3>
+    <p class="config">
+      API base URL: <code id="modalBaseUrl"></code><br>
+      Header name: <code id="modalHeaderName"></code>
+    </p>
+    <input type="password" id="keyInput" placeholder="Paste DeepAI API key" autocomplete="off">
     <button onclick="setKey(false)">Save &amp; Open</button>
     <button class="sec" onclick="setKey(true)">Verify Key</button>
     <p id="keyMsg" style="font-size:13px"></p>
@@ -63,6 +71,14 @@ img,video{max-width:100%;border-radius:6px;margin-top:10px}
       <button class="sec" style="width:auto;margin:0;padding:5px 10px"
         onclick="document.getElementById('keyModal').classList.remove('hide')">API Key</button>
     </div>
+
+    <div class="config" style="margin-top:12px">
+      <b>Upstream request settings</b><br>
+      API base URL: <code id="baseUrl"></code><br>
+      Example endpoint: <code id="exampleUrl"></code><br>
+      Header: <code id="headerName"></code>: <code>your API key</code>
+    </div>
+
     <button class="grn" id="allBtn" onclick="testAll()">Run All 10 Features Auto-Test</button>
     <div id="suiteList" style="margin-top:10px"></div>
 
@@ -105,8 +121,8 @@ img,video{max-width:100%;border-radius:6px;margin-top:10px}
       </div>
       <div id="fVidOpt" class="hide">
         <select id="mode"><option value="">mode (default)</option><option>hd</option><option>hollywood</option></select>
-        <input type="number" id="dur" placeholder="duration (5-15)">
-        <input type="text" id="shp" placeholder="shape (16:9)">
+        <input type="number" id="dur" placeholder="duration">
+        <input type="text" id="shp" placeholder="shape (e.g. 16:9)">
       </div>
       <button id="singleBtn">Send Single Request</button>
     </form>
@@ -118,20 +134,25 @@ img,video{max-width:100%;border-radius:6px;margin-top:10px}
   </div>
 
   <div class="box">
-    <b>Raw API Response (click any test row to inspect)</b>
+    <b>Raw API Response (click a test row to inspect)</b>
     <pre id="out">Ready.</pre>
     <div id="media"></div>
   </div>
 </div>
 
 <script>
+const API_BASE = {{ api_base|tojson }};
+const API_HEADER = {{ api_header|tojson }};
+const ENDPOINTS = {{ endpoints|tojson }};
 let K = sessionStorage.getItem("deepai_key") || "";
 const RESULTS = {};
-const EPS = [
-  "text2img", "image-editor", "background-remover", "colorizer",
-  "torch-srgan", "waifu2x", "creative-upscale", "image-replace",
-  "text2video", "img2video"
-];
+const EPS = Object.keys(ENDPOINTS);
+
+document.getElementById("baseUrl").textContent = API_BASE;
+document.getElementById("exampleUrl").textContent = API_BASE + ENDPOINTS.text2img;
+document.getElementById("headerName").textContent = API_HEADER;
+document.getElementById("modalBaseUrl").textContent = API_BASE;
+document.getElementById("modalHeaderName").textContent = API_HEADER;
 
 if (K) document.getElementById("keyModal").classList.add("hide");
 toggleFields();
@@ -140,6 +161,7 @@ function toggleFields() {
   const ep = document.getElementById("ep").value;
   const textEndpoints = ["text2img", "image-editor", "image-replace", "text2video", "img2video"];
   const video = ["text2video", "img2video"].includes(ep);
+
   document.getElementById("fTxt").classList.toggle("hide", !textEndpoints.includes(ep));
   document.getElementById("fImg").classList.toggle("hide", ep === "text2img" || ep === "text2video");
   document.getElementById("fMsk").classList.toggle("hide", ep !== "image-replace");
@@ -151,6 +173,7 @@ function toggleFields() {
 async function setKey(verify) {
   const value = document.getElementById("keyInput").value.trim();
   if (!value) return;
+
   K = value;
   sessionStorage.setItem("deepai_key", K);
 
@@ -173,19 +196,23 @@ async function setKey(verify) {
     if (data.status >= 200 && data.status < 300) {
       document.getElementById("keyModal").classList.add("hide");
     }
-  } catch (err) {
-    msg.textContent = String(err);
+  } catch (error) {
+    msg.textContent = String(error);
   }
 }
 
 async function sendProxy(ep, fields) {
-  const fd = new FormData();
-  fd.append("key", K);
-  fd.append("ep", ep);
-  for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined && value !== null && value !== "") fd.append(key, value);
+  const form = new FormData();
+  form.append("key", K);
+  form.append("ep", ep);
+
+  for (const [name, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== null && value !== "") {
+      form.append(name, value);
+    }
   }
-  const response = await fetch("/proxy", {method: "POST", body: fd});
+
+  const response = await fetch("/proxy", {method: "POST", body: form});
   return await response.json();
 }
 
@@ -198,10 +225,10 @@ async function testAll() {
   const button = document.getElementById("allBtn");
   button.disabled = true;
   button.textContent = "Running tests...";
-  for (const key of Object.keys(RESULTS)) delete RESULTS[key];
 
-  const list = document.getElementById("suiteList");
-  list.innerHTML = EPS.map(ep =>
+  for (const name of Object.keys(RESULTS)) delete RESULTS[name];
+
+  document.getElementById("suiteList").innerHTML = EPS.map(ep =>
     `<div class="row" id="r_${ep}" onclick="inspectResult('${ep}')">
       <span>${ep}</span><span id="s_${ep}">Queued</span></div>`
   ).join("");
@@ -209,7 +236,7 @@ async function testAll() {
   try {
     setRow("text2img", "Running...");
     const generated = await sendProxy("text2img", {text: "a red apple on a wooden table"});
-    RESULTS["text2img"] = generated;
+    RESULTS.text2img = generated;
     updateRow("text2img", generated);
     inspectResult("text2img");
 
@@ -231,14 +258,14 @@ async function testAll() {
       ["img2video", {image_url: seedUrl, prompt: "camera zoom in", duration: "5"}]
     ];
 
-    for (const [ep, params] of jobs) {
+    for (const [ep, fields] of jobs) {
       setRow(ep, "Running...");
       try {
-        const result = await sendProxy(ep, params);
+        const result = await sendProxy(ep, fields);
         RESULTS[ep] = result;
         updateRow(ep, result);
-      } catch (err) {
-        const result = {status: 0, body: String(err)};
+      } catch (error) {
+        const result = {status: 0, body: String(error)};
         RESULTS[ep] = result;
         updateRow(ep, result);
       }
@@ -250,20 +277,21 @@ async function testAll() {
 }
 
 function setRow(ep, text) {
-  const el = document.getElementById("s_" + ep);
-  if (el) el.textContent = text;
+  const element = document.getElementById("s_" + ep);
+  if (element) element.textContent = text;
 }
 
 function updateRow(ep, result) {
-  const el = document.getElementById("s_" + ep);
-  if (!el) return;
-  el.textContent = "HTTP " + result.status;
-  el.className = result.status >= 200 && result.status < 300 ? "ok" : "err";
+  const element = document.getElementById("s_" + ep);
+  if (!element) return;
+  element.textContent = "HTTP " + result.status;
+  element.className = result.status >= 200 && result.status < 300 ? "ok" : "err";
 }
 
 function inspectResult(ep) {
   const result = RESULTS[ep];
   if (!result) return;
+
   document.getElementById("out").textContent = JSON.stringify(result, null, 2);
   if (result.body && result.body.id && ["text2video", "img2video"].includes(ep)) {
     document.getElementById("ep").value = ep;
@@ -275,6 +303,7 @@ function inspectResult(ep) {
 
 async function runRequest(event) {
   event.preventDefault();
+
   if (!K) {
     document.getElementById("keyModal").classList.remove("hide");
     return;
@@ -283,11 +312,14 @@ async function runRequest(event) {
   const button = document.getElementById("singleBtn");
   button.disabled = true;
   button.textContent = "Loading...";
+
   const ep = document.getElementById("ep").value;
   const fields = {};
   const text = document.getElementById("txt").value.trim();
 
-  if (text) fields[["text2video", "img2video"].includes(ep) ? "prompt" : "text"] = text;
+  if (text) {
+    fields[["text2video", "img2video"].includes(ep) ? "prompt" : "text"] = text;
+  }
 
   const imageFile = document.getElementById("imgF").files[0];
   if (imageFile) fields.image_file = imageFile;
@@ -302,9 +334,16 @@ async function runRequest(event) {
   }
 
   const options = {
-    image_generator_version: "ver", resolution: "res", width: "w", height: "h",
-    negative_prompt: "neg", mode: "mode", duration: "dur", shape: "shp"
+    image_generator_version: "ver",
+    resolution: "res",
+    width: "w",
+    height: "h",
+    negative_prompt: "neg",
+    mode: "mode",
+    duration: "dur",
+    shape: "shp"
   };
+
   for (const [field, id] of Object.entries(options)) {
     const value = document.getElementById(id).value;
     if (value) fields[field] = value;
@@ -313,10 +352,12 @@ async function runRequest(event) {
   try {
     const result = await sendProxy(ep, fields);
     document.getElementById("out").textContent = JSON.stringify(result, null, 2);
-    if (result.body && result.body.id) document.getElementById("jobId").value = result.body.id;
+    if (result.body && result.body.id) {
+      document.getElementById("jobId").value = result.body.id;
+    }
     showMedia(result.body && result.body.output_url);
-  } catch (err) {
-    document.getElementById("out").textContent = String(err);
+  } catch (error) {
+    document.getElementById("out").textContent = String(error);
   } finally {
     button.disabled = false;
     button.textContent = "Send Single Request";
@@ -326,6 +367,7 @@ async function runRequest(event) {
 async function videoStatus() {
   const id = document.getElementById("jobId").value.trim();
   if (!id || !K) return;
+
   try {
     const response = await fetch("/status", {
       method: "POST",
@@ -335,24 +377,25 @@ async function videoStatus() {
     const result = await response.json();
     document.getElementById("out").textContent = JSON.stringify(result, null, 2);
     showMedia(result.body && result.body.output_url);
-  } catch (err) {
-    document.getElementById("out").textContent = String(err);
+  } catch (error) {
+    document.getElementById("out").textContent = String(error);
   }
 }
 
 function showMedia(url) {
-  const media = document.getElementById("media");
-  media.replaceChildren();
+  const container = document.getElementById("media");
+  container.replaceChildren();
   if (!url) return;
-  const isVideo = /\.mp4(?:$|[?#])/i.test(url);
-  const element = document.createElement(isVideo ? "video" : "img");
+
+  const video = /\.mp4(?:$|[?#])/i.test(url);
+  const element = document.createElement(video ? "video" : "img");
   element.src = url;
-  if (isVideo) {
+  if (video) {
     element.controls = true;
     element.autoplay = true;
     element.loop = true;
   }
-  media.appendChild(element);
+  container.appendChild(element);
 }
 </script>
 </body>
@@ -360,7 +403,11 @@ function showMedia(url) {
 """
 
 
-def response_payload(response):
+def api_headers(key):
+    return {API_HEADER_NAME: key}
+
+
+def format_response(response):
     try:
         body = response.json()
     except ValueError:
@@ -368,11 +415,7 @@ def response_payload(response):
     return {"status": response.status_code, "body": body}
 
 
-def api_headers(key):
-    return {"Api-key": key}
-
-
-def call_api(endpoint, key, data=None, files=None, timeout=120):
+def post_to_deepai(endpoint, key, data=None, files=None, timeout=120):
     url = API_BASE + ENDPOINTS[endpoint]
     response = requests.post(
         url,
@@ -381,24 +424,31 @@ def call_api(endpoint, key, data=None, files=None, timeout=120):
         files=files or None,
         timeout=timeout,
     )
-    return response_payload(response)
+    return format_response(response)
 
 
 @app.route("/")
 def home():
-    return render_template_string(HTML)
+    return render_template_string(
+        HTML,
+        api_base=API_BASE,
+        api_header=API_HEADER_NAME,
+        endpoints=ENDPOINTS,
+    )
 
 
 @app.route("/verify", methods=["POST"])
 def verify():
     payload = request.get_json(silent=True) or {}
-    key = payload.get("key", "").strip()
+    key = str(payload.get("key", "")).strip()
+
     if not key:
         return jsonify({"status": 400, "body": "API key is required"}), 400
 
     try:
-        result = call_api("text2img", key, {"text": "test"}, timeout=30)
-        return jsonify(result)
+        return jsonify(
+            post_to_deepai("text2img", key, data={"text": "test"}, timeout=30)
+        )
     except requests.RequestException as exc:
         return jsonify({"status": 502, "body": str(exc)}), 502
 
@@ -407,38 +457,51 @@ def verify():
 def proxy():
     key = request.form.get("key", "").strip()
     endpoint = request.form.get("ep", "")
+
     if not key:
         return jsonify({"status": 400, "body": "API key is required"}), 400
     if endpoint not in ENDPOINTS:
         return jsonify({"status": 400, "body": "Unknown endpoint"}), 400
 
-    allowed = [
+    allowed_fields = [
         "text", "prompt", "image_generator_version", "resolution", "width",
         "height", "negative_prompt", "mode", "duration", "shape",
     ]
-    data = {name: request.form[name] for name in allowed if request.form.get(name)}
-
+    data = {
+        name: request.form[name]
+        for name in allowed_fields
+        if request.form.get(name)
+    }
     files = {}
+
     image_file = request.files.get("image_file")
     if image_file and image_file.filename:
-        files["image"] = (image_file.filename, image_file.stream, image_file.mimetype)
+        files["image"] = (
+            image_file.filename,
+            image_file.stream,
+            image_file.mimetype or "application/octet-stream",
+        )
     elif request.form.get("image_url"):
         data["image"] = request.form["image_url"]
 
     mask_file = request.files.get("mask_file")
     if mask_file and mask_file.filename:
-        files["mask"] = (mask_file.filename, mask_file.stream, mask_file.mimetype)
+        files["mask"] = (
+            mask_file.filename,
+            mask_file.stream,
+            mask_file.mimetype or "application/octet-stream",
+        )
     elif request.form.get("mask_url"):
         data["mask"] = request.form["mask_url"]
 
     try:
-        return jsonify(call_api(endpoint, key, data=data, files=files))
+        return jsonify(post_to_deepai(endpoint, key, data=data, files=files))
     except requests.RequestException as exc:
         return jsonify({"status": 502, "body": str(exc)}), 502
 
 
 @app.route("/status", methods=["POST"])
-def status():
+def video_status():
     payload = request.get_json(silent=True) or {}
     key = str(payload.get("key", "")).strip()
     job_id = str(payload.get("id", "")).strip()
@@ -446,8 +509,9 @@ def status():
     if not key or not job_id:
         return jsonify({"status": 400, "body": "API key and job ID are required"}), 400
 
-    # DeepAI video job IDs are expected to be queried via its video-status API.
-    url = "https://api.deepai.org/api/video-generator-status"
+    # Confirm the status endpoint and required parameter against your DeepAI account's API docs.
+    url = API_BASE + "video-generator-status"
+
     try:
         response = requests.get(
             url,
@@ -455,10 +519,14 @@ def status():
             params={"id": job_id},
             timeout=30,
         )
-        return jsonify(response_payload(response))
+        return jsonify(format_response(response))
     except requests.RequestException as exc:
         return jsonify({"status": 502, "body": str(exc)}), 502
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")), debug=False)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8080")),
+        debug=False,
+    )
