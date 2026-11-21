@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 import json, urllib.request, urllib.error
 
-HOST, PORT = "127.0.0.1", 8765
+HOST, PORT = "0.0.0.0", 8080
 
 HTML = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DeepAI Key Dashboard</title>
@@ -13,7 +13,7 @@ HTML = r'''<!doctype html>
 </style></head><body><main class="wrap"><h1>DeepAI API dashboard</h1><p class="sub">A small local interface for checking your key and trying supported DeepAI endpoints.</p>
 <section class="card"><label for="key">DeepAI API key</label><div class="row"><input id="key" type="password" autocomplete="off" placeholder="Paste your API key"><button id="check">Check key</button><button class="secondary" id="forget">Forget</button></div><p class="hint">Key is kept only in this page's memory and sent to the local Python service, which forwards it to DeepAI over HTTPS. It is not saved to disk.</p><div id="keyStatus" class="status muted"></div></section>
 <section id="infoCard" class="card hidden"><h2 style="margin-top:0">Key / account information</h2><div id="metrics" class="grid"></div><p class="hint" style="margin-bottom:0">DeepAI may not provide account plan, billing, quota, or usage details through its public API. Fields unavailable from the provider are shown as unreported—not guessed. Check your DeepAI account dashboard for authoritative billing details.</p></section>
-<section class="card"><h2 style="margin-top:0">Try an API feature</h2><p class="muted">Requests run through this local server; use only features your key and DeepAI account support.</p><div class="service"><div><h3>Chat</h3><p>Send a prompt to DeepAI's chat endpoint.</p></div><button onclick="run('chat')">Open</button></div><div id="chatBox" class="hidden"><label for="chatPrompt">Prompt</label><textarea id="chatPrompt" placeholder="Ask something..."></textarea><div class="row" style="margin-top:9px"><button onclick="run('chat')">Send chat</button></div><div id="chatResult" class="result hidden"></div></div>
+<section class="card"><h2 style="margin-top:0">Try an API feature</h2><p class="muted">Requests run through Python, which sends them to DeepAI’s unified /ai endpoint. Feature/model support depends on your account.</p><div class="service"><div><h3>Chat</h3><p>Send a prompt to DeepAI's chat endpoint.</p></div><button onclick="run('chat')">Open</button></div><div id="chatBox" class="hidden"><label for="chatPrompt">Prompt</label><textarea id="chatPrompt" placeholder="Ask something..."></textarea><div class="row" style="margin-top:9px"><button onclick="run('chat')">Send chat</button></div><div id="chatResult" class="result hidden"></div></div>
 <div class="service"><div><h3>Image generation</h3><p>Generate an image from a text prompt. Result may include a URL.</p></div><button onclick="run('image')">Generate</button></div><div id="imageBox" class="hidden"><label for="imagePrompt">Image prompt</label><textarea id="imagePrompt" placeholder="Describe the image..."></textarea><div class="row" style="margin-top:9px"><button onclick="run('image')">Generate image</button></div><div id="imageResult" class="result hidden"></div></div>
 <div class="service"><div><h3>Image editing</h3><p>Upload an image plus an edit prompt. Availability/model behavior depends on DeepAI.</p></div><button onclick="run('edit')">Edit</button></div><div id="editBox" class="hidden"><label for="editPrompt">Edit instruction</label><textarea id="editPrompt" placeholder="What should change?"></textarea><label for="editFile" style="margin-top:10px">Image file</label><input id="editFile" type="file" accept="image/*"><div class="row" style="margin-top:9px"><button onclick="run('edit')">Edit image</button></div><div id="editResult" class="result hidden"></div></div>
 <div class="service"><div><h3>Video / music generation</h3><p>DeepAI may not expose these as public API endpoints. Use the hosted generator links where available.</p></div><span class="pill">Provider availability varies</span></div><div class="row"><a href="https://deepai.org/video" target="_blank" rel="noopener" style="color:#bdb3ff">AI Video Generator ↗</a><span class="muted">·</span><a href="https://deepai.org" target="_blank" rel="noopener" style="color:#bdb3ff">DeepAI ↗</a></div>
@@ -30,11 +30,12 @@ function render(d){let s=esc(JSON.stringify(d,null,2));let urls=[];function scan
 </script></body></html>'''
 
 # Public API calls are proxied here so browser CORS does not block the page.
-def upstream(endpoint, key, fields=None, file_data=None, filename=None):
-    url='https://api.deepai.org/api/'+endpoint
+def deepai_ai(key, fields=None, file_data=None, filename=None):
+    """Send every provider request through DeepAI's unified /ai endpoint."""
+    import base64, re
+    url='https://api.deepai.org/ai'
     headers={'api-key':key,'User-Agent':'Local-DeepAI-Dashboard/1.0'}
     if file_data is not None:
-        import base64, re
         m=re.match(r'data:([^;]+);base64,(.*)',file_data,re.S)
         if not m: raise ValueError('Invalid image data')
         content=base64.b64decode(m.group(2))
@@ -47,13 +48,12 @@ def upstream(endpoint, key, fields=None, file_data=None, filename=None):
         pieces.append(f'--{boundary}--\r\n'.encode())
         data=b''.join(pieces);headers['Content-Type']='multipart/form-data; boundary='+boundary
     else:
-        data=None
-        if fields:
-            from urllib.parse import urlencode
-            data=urlencode(fields).encode();headers['Content-Type']='application/x-www-form-urlencoded'
+        from urllib.parse import urlencode
+        data=urlencode(fields or {}).encode()
+        headers['Content-Type']='application/x-www-form-urlencoded'
     req=urllib.request.Request(url,data=data,headers=headers,method='POST')
     try:
-        with urllib.request.urlopen(req,timeout=90) as r:
+        with urllib.request.urlopen(req,timeout=120) as r:
             raw=r.read();ct=r.headers.get('Content-Type','')
             if 'json' in ct:
                 try:return json.loads(raw.decode('utf-8'))
@@ -78,23 +78,24 @@ class Handler(BaseHTTPRequestHandler):
             if not key:return self.send_json(400,{'error':'API key is required.'})
             route=urlparse(self.path).path
             if route=='/api/check':
-                # The public text-generation endpoint serves as a lightweight credential check.
                 try:
-                    upstream('text2text',key,{'text':'Reply with OK.'})
-                    return self.send_json(200,{'valid':True,'message':'DeepAI accepted the key for a test request. No account plan, billing, or usage metadata was exposed by this API.'})
+                    deepai_ai(key,{'model':'chat','messages':[{'role':'user','content':'Reply with OK.'}]})
+                    return self.send_json(200,{'valid':True,'message':'DeepAI accepted the key for a test request. Plan, billing, and usage metadata are only shown if the provider returns them.'})
                 except Exception as e:
                     return self.send_json(401,{'valid':False,'error':str(e)})
+            prompt=str(d.get('prompt','')).strip()
+            if not prompt:return self.send_json(400,{'error':'Enter a prompt.'})
             if route=='/api/chat':
-                result=upstream('chat',key,{'text':str(d.get('prompt',''))})
+                result=deepai_ai(key,{'model':'chat','messages':[{'role':'user','content':prompt}]})
             elif route=='/api/image':
-                result=upstream('text2img',key,{'text':str(d.get('prompt',''))})
+                result=deepai_ai(key,{'model':'image','prompt':prompt})
             elif route=='/api/edit':
-                result=upstream('image-editor',key,{'text':str(d.get('prompt',''))},d.get('image'),d.get('filename'))
+                result=deepai_ai(key,{'model':'image-edit','prompt':prompt},d.get('image'),d.get('filename'))
             else:return self.send_json(404,{'error':'Unknown endpoint.'})
             return self.send_json(200,{'result':result})
         except Exception as e:return self.send_json(502,{'error':str(e)})
     def log_message(self,fmt,*args): print('%s - %s'%(self.address_string(),fmt%args))
 
 if __name__=='__main__':
-    print(f'Open http://{HOST}:{PORT} in your browser. Press Ctrl+C to stop.')
+    print(f'Open http://127.0.0.1:{PORT} in your browser (or this machine’s address). Press Ctrl+C to stop.')
     HTTPServer((HOST,PORT),Handler).serve_forever()
